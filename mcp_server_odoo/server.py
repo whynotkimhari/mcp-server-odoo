@@ -90,7 +90,7 @@ class OdooMCPServer:
                 logger.info(f"Successfully connected to Odoo at {self.config.url}")
 
                 # Initialize access controller
-                self.access_controller = AccessController(self.config, connection=self.connection)
+                self.access_controller = AccessController(self.config)
             except OdooConnectionError as e:
                 # Log warning but don't fail startup
                 logger.warning(f"Could not connect to Odoo: {e}")
@@ -142,12 +142,10 @@ class OdooMCPServer:
     def _register_tools(self):
         """Register tool handlers."""
         # We always register tools, even if not connected, so the 'authenticate' tool is available
-        if self.connection:
+        if self.connection and self.access_controller:
             # Create a dummy access controller if not connected yet
-            controller = self.access_controller or AccessController(self.config, connection=self.connection)
-            
             self.tool_handler = register_tools(
-                self.app, self.connection, controller, self.config
+                self.app, self.connection, self.access_controller, self.config
             )
             logger.info("Registered MCP tools")
 

@@ -869,7 +869,7 @@ class OdooToolHandler:
                     raise ValidationError("Not authenticated with Odoo")
 
                 # Check if YOLO mode is enabled
-                if self.config.is_yolo_enabled and self.config.yolo_mode in ["read", "true"]:
+                if self.config.is_yolo_enabled:
                     # Query actual models from ir.model in YOLO mode
                     try:
                         # Exclude transient models and less useful system models
