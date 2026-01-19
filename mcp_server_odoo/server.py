@@ -90,12 +90,17 @@ class OdooMCPServer:
                 logger.info(f"Successfully connected to Odoo at {self.config.url}")
 
                 # Initialize access controller
-                self.access_controller = AccessController(self.config)
+                self.access_controller = AccessController(self.config, connection=self.connection)
+            except OdooConnectionError as e:
+                # Log warning but don't fail startup
+                logger.warning(f"Could not connect to Odoo: {e}")
+                logger.warning("Server starting in disconnected mode. Use 'authenticate' tool to connect.")
+                # We still keep the connection object for later retry
+            except ConfigurationError:
+                # Configuration errors should fail startup
+                raise
             except Exception as e:
                 context = ErrorContext(operation="connection_setup")
-                # Let specific errors propagate as-is
-                if isinstance(e, (OdooConnectionError, ConfigurationError)):
-                    raise
                 # Handle other unexpected errors
                 error_handler.handle_error(e, context=context)
 
@@ -128,17 +133,21 @@ class OdooMCPServer:
 
     def _register_resources(self):
         """Register resource handlers after connection is established."""
-        if self.connection and self.access_controller:
+        if self.connection and self.connection.is_authenticated and self.access_controller:
             self.resource_handler = register_resources(
                 self.app, self.connection, self.access_controller, self.config
             )
             logger.info("Registered MCP resources")
 
     def _register_tools(self):
-        """Register tool handlers after connection is established."""
-        if self.connection and self.access_controller:
+        """Register tool handlers."""
+        # We always register tools, even if not connected, so the 'authenticate' tool is available
+        if self.connection:
+            # Create a dummy access controller if not connected yet
+            controller = self.access_controller or AccessController(self.config, connection=self.connection)
+            
             self.tool_handler = register_tools(
-                self.app, self.connection, self.access_controller, self.config
+                self.app, self.connection, controller, self.config
             )
             logger.info("Registered MCP tools")
 

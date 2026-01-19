@@ -503,7 +503,18 @@ class OdooToolHandler:
             model: str,
             values: Dict[str, Any],
         ) -> Dict[str, Any]:
-            """Create a new record in an Odoo model.
+            """⚠️ MANDATORY USER CONFIRMATION REQUIRED ⚠️
+            This operation will MODIFY the database by creating a new record.
+            CRITICAL: You MUST ALWAYS stop and ask the user for explicit approval before executing this tool,
+            even if the user has already stated their intent (e.g., 'Create a new customer named John').
+            WORKFLOW:
+                1. STOP - Do NOT execute immediately
+                2. SHOW the user exactly what will be created (model, field values)
+                3. ASK for explicit confirmation: 'Should I proceed with creating this record?'
+                4. WAIT for user approval
+                5. ONLY THEN execute if the user confirms
+            
+            Create a new record in an Odoo model.
 
             Args:
                 model: The Odoo model name (e.g., 'res.partner')
@@ -520,7 +531,18 @@ class OdooToolHandler:
             record_id: int,
             values: Dict[str, Any],
         ) -> Dict[str, Any]:
-            """Update an existing record.
+            """⚠️ MANDATORY USER CONFIRMATION REQUIRED ⚠️
+            This operation will MODIFY the database by updating an existing record
+            CRITICAL: You MUST ALWAYS stop and ask the user for explicit approval before executing this tool,
+            even if the user has already stated their intent (e.g., 'Update customer X with email Y').
+            WORKFLOW:
+                1. STOP - Do NOT execute immediately
+                2. SHOW the user exactly what will be updated (model, record ID, field changes)
+                3. ASK for explicit confirmation: 'Should I proceed with updating this record?'
+                4. WAIT for user approval
+                5. ONLY THEN execute if the user confirms
+
+            Update an existing record.
 
             Args:
                 model: The Odoo model name (e.g., 'res.partner')
@@ -537,7 +559,19 @@ class OdooToolHandler:
             model: str,
             record_id: int,
         ) -> Dict[str, Any]:
-            """Delete a record.
+            """🚨 MANDATORY USER CONFIRMATION REQUIRED 🚨
+            This is a DESTRUCTIVE operation that PERMANENTLY DELETES data from the database.
+            CRITICAL: You MUST ALWAYS stop and ask the user for explicit approval before executing this tool,
+            even if the user has already stated their intent (e.g., 'Delete product JPFI00002').
+            WORKFLOW:
+                1. STOP - Do NOT execute immediately
+                2. SHOW the user exactly what will be deleted (model, record ID, record details)
+                3. WARN that this action is PERMANENT and CANNOT BE UNDONE
+                4. ASK for explicit confirmation: 'Are you absolutely sure you want to delete this record?'
+                5. WAIT for user approval
+                6. ONLY THEN execute if the user confirms
+                
+            Delete a record.
 
             Args:
                 model: The Odoo model name (e.g., 'res.partner')
@@ -547,6 +581,69 @@ class OdooToolHandler:
                 Dictionary with deletion confirmation
             """
             return await self._handle_delete_record_tool(model, record_id)
+
+        @self.app.tool()
+        async def execute_kw(
+            model: str,
+            method: str,
+            args: List[Any],
+            kwargs: Dict[str, Any],
+        ) -> Any:
+            """⚠️ MANDATORY USER CONFIRMATION REQUIRED ⚠️
+            This operation may MODIFY the database by executing a method/action on Odoo records.
+            CRITICAL: You MUST ALWAYS stop and ask the user for explicit approval before executing this tool, 
+            even if the user has already stated their intent (e.g., 'Confirm sale order SO001').
+            WORKFLOW:
+                1. STOP - Do NOT execute immediately
+                2. SHOW the user exactly what will be executed (model, method name, record IDs, arguments)
+                3. EXPLAIN what this method does (if known)
+                4. ASK for explicit confirmation: 'Should I proceed with executing this method?'
+                5. WAIT for user approval
+                6. ONLY THEN execute if the user confirms
+
+            Execute a public method on an Odoo model (execute_kw).
+
+            This tool provides low-level access to Odoo's XML-RPC execute_kw method,
+            allowing you to call any public method on any model.
+
+            Args:
+                model: The Odoo model name (e.g., 'sale.order')
+                method: The method name to execute (e.g., 'action_confirm')
+                args: Positional arguments for the method (must be a list)
+                kwargs: Keyword arguments for the method (must be a dict)
+
+            Returns:
+                Result of the method execution
+            """
+            return await self._handle_execute_kw_tool(model, method, args, kwargs)
+
+        @self.app.tool()
+        async def inspect_model(
+            model: str,
+            attributes: Optional[List[str]] = None,
+        ) -> Dict[str, Any]:
+            """Inspect a model to get field definitions (fields_get).
+
+            Args:
+                model: The Odoo model name
+                attributes: Optional list of specific attributes to retrieve (e.g., ['string', 'help', 'type'])
+
+            Returns:
+                Dictionary mapping field names to their definitions
+            """
+            return await self._handle_inspect_model_tool(model, attributes)
+
+        @self.app.tool()
+        async def authenticate() -> str:
+            """Re-authenticate with the Odoo server.
+
+            Useful if the session has expired or connection was lost.
+            This will attempt to reconnect and authenticate using configured credentials.
+
+            Returns:
+                Status message indicating success or failure
+            """
+            return await self._handle_authenticate_tool()
 
     async def _handle_search_tool(
         self,
@@ -767,8 +864,12 @@ class OdooToolHandler:
         """Handle list models tool request with permissions."""
         try:
             with perf_logger.track_operation("tool_list_models"):
+                # Ensure we're connected
+                if not self.connection.is_authenticated:
+                    raise ValidationError("Not authenticated with Odoo")
+
                 # Check if YOLO mode is enabled
-                if self.config.is_yolo_enabled:
+                if self.config.is_yolo_enabled and self.config.yolo_mode in ["read", "true"]:
                     # Query actual models from ir.model in YOLO mode
                     try:
                         # Exclude transient models and less useful system models
@@ -1136,6 +1237,87 @@ class OdooToolHandler:
             sanitized_msg = ErrorSanitizer.sanitize_message(str(e))
             raise ToolError(f"Failed to delete record: {sanitized_msg}") from e
 
+    async def _handle_execute_kw_tool(
+        self,
+        model: str,
+        method: str,
+        args: List[Any],
+        kwargs: Dict[str, Any],
+    ) -> Any:
+        """Handle execute_kw tool request."""
+        try:
+            with perf_logger.track_operation("tool_execute_kw", model=model):
+                # Minimal check
+                self.access_controller.validate_model_access(model, "read")
+
+                # Ensure we're connected
+                if not self.connection.is_authenticated:
+                    raise ValidationError("Not authenticated with Odoo")
+
+                # Execute method
+                result = self.connection.execute_kw(model, method, args, kwargs)
+                
+                return result
+
+        except AccessControlError as e:
+            raise ToolError(f"Access denied: {e}") from e
+        except OdooConnectionError as e:
+            raise ToolError(f"Connection error: {e}") from e
+        except Exception as e:
+            logger.error(f"Error in execute_kw tool: {e}")
+            sanitized_msg = ErrorSanitizer.sanitize_message(str(e))
+            raise ToolError(f"Failed to execute method: {sanitized_msg}") from e
+
+    async def _handle_inspect_model_tool(
+        self,
+        model: str,
+        attributes: Optional[List[str]],
+    ) -> Dict[str, Any]:
+        """Handle inspect model tool request."""
+        try:
+            with perf_logger.track_operation("tool_inspect_model", model=model):
+                # Check model access
+                self.access_controller.validate_model_access(model, "read")
+
+                # Ensure we're connected
+                if not self.connection.is_authenticated:
+                    raise ValidationError("Not authenticated with Odoo")
+
+                # Get fields
+                fields = self.connection.fields_get(model, attributes)
+                
+                return {
+                    "model": model,
+                    "fields": fields,
+                    "total_fields": len(fields)
+                }
+
+        except AccessControlError as e:
+            raise ToolError(f"Access denied: {e}") from e
+        except OdooConnectionError as e:
+            raise ToolError(f"Connection error: {e}") from e
+        except Exception as e:
+            logger.error(f"Error in inspect_model tool: {e}")
+            sanitized_msg = ErrorSanitizer.sanitize_message(str(e))
+            raise ToolError(f"Failed to inspect model: {sanitized_msg}") from e
+
+    async def _handle_authenticate_tool(self) -> str:
+        """Handle authenticate tool request."""
+        try:
+            with perf_logger.track_operation("tool_authenticate"):
+                # Force reconnect
+                self.connection.disconnect()
+                self.connection.connect()
+                self.connection.authenticate()
+                
+                return f"Successfully authenticated as uid={self.connection.uid} on database={self.connection.database}"
+
+        except OdooConnectionError as e:
+            raise ToolError(f"Connection error: {e}") from e
+        except Exception as e:
+            logger.error(f"Error in authenticate tool: {e}")
+            sanitized_msg = ErrorSanitizer.sanitize_message(str(e))
+            raise ToolError(f"Failed to authenticate: {sanitized_msg}") from e
 
 def register_tools(
     app: FastMCP,
